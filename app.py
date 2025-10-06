@@ -1,64 +1,62 @@
+# amazonScraping.py
 from flask import Flask, jsonify
 from flask_cors import CORS
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
+import requests
 from bs4 import BeautifulSoup
-import time
 import os
 
 app = Flask(__name__)
 CORS(app)
 
-def scrape_amazon_multiple_pages(base_url, myProductArray, max_pages=2):
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+def scrape_amazon(base_url, myProductArray, max_pages=2):
     all_results = []
 
-    options = webdriver.ChromeOptions()
-    # options.add_argument("--headless")  # Uncomment for headless mode
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_argument("--incognito")
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-
     for page in range(1, max_pages + 1):
+        print(f"Scraping page {page}...")
         url = f"{base_url}&page={page}"
-        driver.get(url)
-        time.sleep(3)
-
-        # Scroll to load products
-        for _ in range(3):
-            driver.execute_script("window.scrollBy(0, document.body.scrollHeight/3);")
-            time.sleep(2)
-
-        soup = BeautifulSoup(driver.page_source, 'html.parser')
-        items = soup.select("div.s-main-slot div.s-result-item[data-asin]")
-
-        if not items:
-            continue
-
-        for item in items:
-            asin = item.get('data-asin')
-            if not asin or asin not in myProductArray:
+        try:
+            response = requests.get(url, headers=HEADERS, timeout=10)
+            if response.status_code != 200:
+                print(f"⚠️ Failed to fetch {url}")
                 continue
 
-            title_elem = item.select_one("h2 span.a-text-normal")
-            rating_elem = item.select_one("span.a-icon-alt")
-            review_elem = item.select_one("span.a-size-base.s-underline-text")
-            sponsored_elem = item.select_one("span.s-label-popover-default")
+            soup = BeautifulSoup(response.text, "html.parser")
+            items = soup.select("div.s-main-slot div.s-result-item[data-asin]")
 
-            all_results.append({
-                "Index": item.get('data-index', 'N/A'),
-                "ASIN": asin,
-                "Title": title_elem.get_text(strip=True) if title_elem else "N/A",
-                "Rating": rating_elem.get_text(strip=True) if rating_elem else "N/A",
-                "Review Count": review_elem.get_text(strip=True) if review_elem else "N/A",
-                "Sponsored": sponsored_elem.get_text(strip=True) if sponsored_elem else "No"
-            })
+            for item in items:
+                asin = item.get("data-asin")
+                if not asin or asin not in myProductArray:
+                    continue
 
-        time.sleep(2)
+                title_elem = item.select_one("h2 span.a-text-normal")
+                rating_elem = item.select_one("span.a-icon-alt")
+                review_elem = item.select_one("span.a-size-base.s-underline-text")
+                sponsored_elem = item.select_one("span.s-label-popover-default")
 
-    driver.quit()
-    return all_results
+                all_results.append({
+                    "ASIN": asin,
+                    "Title": title_elem.get_text(strip=True) if title_elem else "N/A",
+                    "Rating": rating_elem.get_text(strip=True) if rating_elem else "N/A",
+                    "Review Count": review_elem.get_text(strip=True) if review_elem else "N/A",
+                    "Sponsored": sponsored_elem.get_text(strip=True) if sponsored_elem else "No"
+                })
+        except Exception as e:
+            print(f"Error scraping page {page}: {e}")
 
+    # Remove duplicates by ASIN
+    unique_products = {p["ASIN"]: p for p in all_results}
+    return list(unique_products.values())
+
+# ---------------- FLASK ROUTE ---------------- #
 @app.route("/scrape_all", methods=["GET"])
 def scrape_all():
     urls = {
@@ -80,9 +78,7 @@ def scrape_all():
 
     results = {}
     for name, url in urls.items():
-        scraped_products = scrape_amazon_multiple_pages(url, myProductArray, max_pages=2)
-        unique_products = {p["ASIN"]: p for p in scraped_products}
-        results[name] = list(unique_products.values())
+        results[name] = scrape_amazon(url, myProductArray, max_pages=2)
 
     return jsonify(results)
 
