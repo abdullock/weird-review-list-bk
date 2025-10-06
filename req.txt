@@ -1,5 +1,0 @@
-flask
-flask-cors
-selenium
-beautifulsoup4
-webdriver-manager
